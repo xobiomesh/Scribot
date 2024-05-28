@@ -1,18 +1,25 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, Events } = require('discord.js');
 const fs = require('fs');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-const token = process.env.DISCORD_BOT_TOKEN;
-
-client.once('ready', () => {
+client.once(Events.ClientReady, () => {
     console.log('Bot is online!');
 });
 
-client.on('messageCreate', async message => {
-    if (message.content === '!fetch') {
-        const channel = message.channel;
+client.on(Events.InteractionCreate, async interaction => {
+    if (!interaction.isCommand()) return;
+
+    const { commandName } = interaction;
+
+    if (commandName === 'help') {
+        const helpMessage = 'Here are the available commands:\n';
+        helpMessage += '`/help`: Displays this help message\n';
+        helpMessage += '`/fetch`: Fetches all messages from the channel and saves them to a file\n';
+        await interaction.reply(helpMessage);
+    } else if (commandName === 'fetch') {
+        const channel = interaction.channel;
         let messages = [];
         let lastMessageId;
 
@@ -28,8 +35,8 @@ client.on('messageCreate', async message => {
 
         const content = messages.reverse().map(msg => `${msg.createdAt.toISOString()} - ${msg.author.username}: ${msg.content}`).join('\n');
         fs.writeFileSync('channel_messages.txt', content);
-        message.channel.send('Fetched and saved all messages to channel_messages.txt');
+        await interaction.reply('Fetched and saved all messages to channel_messages.txt');
     }
 });
 
-client.login(token);
+client.login(process.env.DISCORD_BOT_TOKEN);

@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@discordjs/builders": "^1.8.1",
     "@discordjs/rest": "^2.3.0",
     "discord-api-types": "^0.37.86",
     "discord.js": "^14.15.2",

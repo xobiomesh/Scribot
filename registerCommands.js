@@ -1,5 +1,6 @@
 require('dotenv').config();
-const { REST, Routes } = require('@discordjs/rest');
+const { REST } = require('@discordjs/rest');
+const { Routes } = require('discord-api-types/v10');
 const { SlashCommandBuilder } = require('@discordjs/builders');
 
 const commands = [
