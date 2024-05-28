@@ -1,18 +1,4 @@
-2024-03-08T20:36:17.591Z - onsimius: Hi again! I've been trying to get the  notes from different days and under different headings to be retrieved and I think I'm almost there but I the data doesn't make it to the end and into the new note... 
-`js
-function appendSectionsToNote(tp, headingsWithOffsets) {
-    
-    let allSections = '';
-
-    // Iterate through each headingWithOffset provided in the array
-    headingsWithOffsets.forEach(({ heading, daysOffset = 0 }) => {
-        
-        const dateForHeading = tp.date.now("YYYY-MM-DD dddd", -daysOffset);
-        // Construct the include identifier with the calculated date and the current heading
-        let section = tp.file.include(`[[${dateForHeading}${heading}]]`);
-        // Append the fetched section to the allSections string
-        allSections += section + '\n\n'; // Adding a newline for separation between sections
-    });
+2
 
     return allSections;
 }
