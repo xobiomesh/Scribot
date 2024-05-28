@@ -10,6 +10,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 
 let currentConnection = null;
 let currentReceivers = {};
+let pcmStreams = {};
 
 client.once(Events.ClientReady, () => {
     console.log('Bot is online!');
@@ -79,62 +80,72 @@ const joinAndRecord = async (interaction) => {
             const user = client.users.cache.get(userId);
             console.log(`I'm listening to ${user.username}`);
 
-            const opusStream = receiver.subscribe(userId, {
-                end: {
-                    behavior: EndBehaviorType.AfterSilence,
-                    duration: 1000,
-                },
-            });
+            if (!pcmStreams[userId]) {
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const pcmPath = path.join(voiceChannelDir, `${user.username}-${timestamp}.pcm`);
+                const out = fs.createWriteStream(pcmPath);
 
-            const pcmPath = path.join(voiceChannelDir, `${user.username}.pcm`);
-            const out = fs.createWriteStream(pcmPath);
+                const pcmStream = new prism.opus.Decoder({
+                    frameSize: 960,
+                    channels: 2,
+                    rate: 48000,
+                });
 
-            const pcmStream = new prism.opus.Decoder({
-                frameSize: 960,
-                channels: 2,
-                rate: 48000,
-            });
+                pcmStreams[userId] = {
+                    stream: pcmStream,
+                    path: pcmPath,
+                    out: out,
+                    mp3Path: path.join(voiceChannelDir, `${user.username}-${timestamp}.mp3`)
+                };
 
-            opusStream.pipe(pcmStream).pipe(out);
+                const opusStream = receiver.subscribe(userId);
+                opusStream.pipe(pcmStream).pipe(out);
 
-            opusStream.on('end', () => {
-                console.log(`Finished recording ${user.username}`);
+                out.on('finish', () => {
+                    console.log(`Finished recording ${user.username}`);
 
-                // Convert PCM to MP3 using ffmpeg
-                const mp3Path = path.join(voiceChannelDir, `${user.username}.mp3`);
-                console.log(`Starting conversion for ${user.username}`);
-                ffmpeg(pcmPath)
-                    .inputFormat('s16le')  // Set the input format
-                    .audioChannels(2)      // Set the number of audio channels
-                    .audioFrequency(48000) // Set the sample rate
-                    .audioBitrate(128)
-                    .save(mp3Path)
-                    .on('start', (commandLine) => {
-                        console.log(`Spawned ffmpeg with command: ${commandLine}`);
-                    })
-                    .on('progress', (progress) => {
-                        console.log(`Processing: ${progress.percent}% done`);
-                    })
-                    .on('end', () => {
-                        console.log(`Converted ${user.username}'s recording to MP3`);
-                        fs.unlinkSync(pcmPath);
-                    })
-                    .on('error', (err) => {
-                        console.error(`Error converting ${user.username}'s recording: ${err.message}`);
-                    });
-            });
+                    const { path: pcmPath, mp3Path } = pcmStreams[userId];
+                    console.log(`Starting conversion for ${user.username}`);
+                    ffmpeg(pcmPath)
+                        .inputFormat('s16le')  // Set the input format
+                        .audioChannels(2)      // Set the number of audio channels
+                        .audioFrequency(48000) // Set the sample rate
+                        .audioBitrate(128)
+                        .save(mp3Path)
+                        .on('start', (commandLine) => {
+                            console.log(`Spawned ffmpeg with command: ${commandLine}`);
+                        })
+                        .on('progress', (progress) => {
+                            console.log(`Processing: ${progress.percent}% done`);
+                        })
+                        .on('end', () => {
+                            console.log(`Converted ${user.username}'s recording to MP3`);
+                            fs.unlinkSync(pcmPath);
+                            delete pcmStreams[userId];
+                        })
+                        .on('error', (err) => {
+                            console.error(`Error converting ${user.username}'s recording: ${err.message}`);
+                        });
+                });
 
-            out.on('error', (err) => {
-                console.error(`Error writing PCM file for ${user.username}: ${err.message}`);
-            });
+                out.on('error', (err) => {
+                    console.error(`Error writing PCM file for ${user.username}: ${err.message}`);
+                });
 
-            pcmStream.on('error', (err) => {
-                console.error(`Error decoding OPUS stream for ${user.username}: ${err.message}`);
-            });
+                pcmStream.on('error', (err) => {
+                    console.error(`Error decoding OPUS stream for ${user.username}: ${err.message}`);
+                });
 
-            opusStream.on('error', (err) => {
-                console.error(`Error with OPUS stream for ${user.username}: ${err.message}`);
-            });
+                opusStream.on('error', (err) => {
+                    console.error(`Error with OPUS stream for ${user.username}: ${err.message}`);
+                });
+            }
+        });
+
+        receiver.speaking.on('end', (userId) => {
+            if (pcmStreams[userId]) {
+                pcmStreams[userId].out.end();
+            }
         });
     });
 
