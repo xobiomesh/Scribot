@@ -2,18 +2,18 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, Events, ChannelType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { joinVoiceChannel, getVoiceConnection, VoiceReceiver, EndBehaviorType, VoiceConnectionStatus } = require('@discordjs/voice');
+const prism = require('prism-media');
+const ffmpeg = require('fluent-ffmpeg');
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates] });
+
+let currentConnection = null;
+let currentReceivers = {};
 
 client.once(Events.ClientReady, () => {
     console.log('Bot is online!');
 });
-
-// Ensure the subdirectory exists
-const messagesDir = path.join(__dirname, 'channel_messages');
-if (!fs.existsSync(messagesDir)) {
-    fs.mkdirSync(messagesDir);
-}
 
 // Function to format a message for logging
 const formatMessage = (msg) => {
@@ -29,8 +29,8 @@ const formatMessage = (msg) => {
 // Function to fetch messages from a specific channel and save them to a file
 const fetchMessagesFromChannel = async (channel) => {
     const fileName = `${channel.name}.md`;
-    const filePath = path.join(messagesDir, fileName);
-    
+    const filePath = path.join(__dirname, 'channel_messages', fileName);
+
     let messages = [];
     let lastMessageId;
 
@@ -48,6 +48,119 @@ const fetchMessagesFromChannel = async (channel) => {
     fs.writeFileSync(filePath, content);
 };
 
+// Function to join a voice channel and start recording
+const joinAndRecord = async (interaction) => {
+    const channel = interaction.member.voice.channel;
+
+    if (!channel) {
+        return interaction.reply('You need to join a voice channel first!');
+    }
+
+    const connection = joinVoiceChannel({
+        channelId: channel.id,
+        guildId: channel.guild.id,
+        adapterCreator: channel.guild.voiceAdapterCreator,
+        selfDeaf: false,
+    });
+
+    currentConnection = connection;
+
+    connection.on(VoiceConnectionStatus.Ready, () => {
+        console.log('The bot has connected to the channel!');
+        const receiver = connection.receiver;
+        currentReceivers[channel.id] = receiver;
+
+        const voiceChannelDir = path.join(__dirname, 'channel_messages', channel.name);
+        if (!fs.existsSync(voiceChannelDir)) {
+            fs.mkdirSync(voiceChannelDir, { recursive: true });
+        }
+
+        receiver.speaking.on('start', (userId) => {
+            const user = client.users.cache.get(userId);
+            console.log(`I'm listening to ${user.username}`);
+
+            const opusStream = receiver.subscribe(userId, {
+                end: {
+                    behavior: EndBehaviorType.AfterSilence,
+                    duration: 1000,
+                },
+            });
+
+            const pcmPath = path.join(voiceChannelDir, `${user.username}.pcm`);
+            const out = fs.createWriteStream(pcmPath);
+
+            const pcmStream = new prism.opus.Decoder({
+                frameSize: 960,
+                channels: 2,
+                rate: 48000,
+            });
+
+            opusStream.pipe(pcmStream).pipe(out);
+
+            opusStream.on('end', () => {
+                console.log(`Finished recording ${user.username}`);
+
+                // Convert PCM to MP3 using ffmpeg
+                const mp3Path = path.join(voiceChannelDir, `${user.username}.mp3`);
+                console.log(`Starting conversion for ${user.username}`);
+                ffmpeg(pcmPath)
+                    .inputFormat('s16le')  // Set the input format
+                    .audioChannels(2)      // Set the number of audio channels
+                    .audioFrequency(48000) // Set the sample rate
+                    .audioBitrate(128)
+                    .save(mp3Path)
+                    .on('start', (commandLine) => {
+                        console.log(`Spawned ffmpeg with command: ${commandLine}`);
+                    })
+                    .on('progress', (progress) => {
+                        console.log(`Processing: ${progress.percent}% done`);
+                    })
+                    .on('end', () => {
+                        console.log(`Converted ${user.username}'s recording to MP3`);
+                        fs.unlinkSync(pcmPath);
+                    })
+                    .on('error', (err) => {
+                        console.error(`Error converting ${user.username}'s recording: ${err.message}`);
+                    });
+            });
+
+            out.on('error', (err) => {
+                console.error(`Error writing PCM file for ${user.username}: ${err.message}`);
+            });
+
+            pcmStream.on('error', (err) => {
+                console.error(`Error decoding OPUS stream for ${user.username}: ${err.message}`);
+            });
+
+            opusStream.on('error', (err) => {
+                console.error(`Error with OPUS stream for ${user.username}: ${err.message}`);
+            });
+        });
+    });
+
+    await interaction.reply(`Started recording in the voice channel ${channel.name}!`);
+};
+
+// Function to stop recording and leave the voice channel
+const stopRecording = async (interaction) => {
+    const channel = interaction.member.voice.channel;
+
+    if (!channel) {
+        return interaction.reply('You need to join a voice channel first!');
+    }
+
+    const connection = getVoiceConnection(channel.guild.id);
+
+    if (connection) {
+        connection.destroy();
+        delete currentReceivers[channel.id];
+        currentConnection = null;
+        await interaction.reply(`Stopped recording and left the voice channel ${channel.name}.`);
+    } else {
+        await interaction.reply(`The bot is not in a voice channel.`);
+    }
+};
+
 // Handle slash commands
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isCommand()) return;
@@ -59,13 +172,15 @@ client.on(Events.InteractionCreate, async interaction => {
         helpMessage += '`/help`: Displays this help message\n';
         helpMessage += '`/fetch`: Fetches all messages from the current channel and saves them to a file\n';
         helpMessage += '`/fetchall`: Fetches all messages from all channels and saves them to their respective files\n';
+        helpMessage += '`/record`: Joins the voice channel and starts recording\n';
+        helpMessage += '`/stoprecord`: Stops recording and leaves the voice channel\n';
         await interaction.reply(helpMessage);
     } else if (commandName === 'fetch') {
         const channel = interaction.channel;
         await fetchMessagesFromChannel(channel);
         await interaction.reply(`Fetched and saved all messages from ${channel.name} to channel_messages/${channel.name}.md`);
     } else if (commandName === 'fetchall') {
-        await interaction.deferReply(); // Acknowledge the interaction immediately
+        await interaction.deferReply();
 
         const guild = interaction.guild;
         const channels = guild.channels.cache.filter(channel => channel.type === ChannelType.GuildText);
@@ -75,15 +190,18 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         await interaction.followUp('Fetched and saved all messages from all channels.');
+    } else if (commandName === 'record') {
+        await joinAndRecord(interaction);
+    } else if (commandName === 'stoprecord') {
+        await stopRecording(interaction);
     }
 });
 
-// Automatically append new messages to the file
 client.on(Events.MessageCreate, message => {
-    if (!message.author.bot) { // Ignore messages from bots
+    if (!message.author.bot) {
         const channel = message.channel;
         const fileName = `${channel.name}.md`;
-        const filePath = path.join(messagesDir, fileName);
+        const filePath = path.join(__dirname, 'channel_messages', fileName);
 
         const logMessage = formatMessage(message) + '\n';
         fs.appendFileSync(filePath, logMessage);

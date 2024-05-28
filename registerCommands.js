@@ -12,7 +12,13 @@ const commands = [
         .setDescription('Fetches all messages from the channel and saves them to a file'),
     new SlashCommandBuilder()
         .setName('fetchall')
-        .setDescription('Fetches all messages from all channels and saves them to their respective files')
+        .setDescription('Fetches all messages from all channels and saves them to their respective files'),
+    new SlashCommandBuilder()
+        .setName('record')
+        .setDescription('Joins the voice channel and starts recording'),
+    new SlashCommandBuilder()
+        .setName('stoprecord')
+        .setDescription('Stops recording and leaves the voice channel')
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
