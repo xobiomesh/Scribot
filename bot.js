@@ -9,8 +9,8 @@ const ffmpeg = require('fluent-ffmpeg');
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates] });
 
 let currentConnection = null;
-let currentReceivers = {};
-let pcmStreams = {};
+let currentReceiver = null;
+let recordingStreams = {};
 
 client.once(Events.ClientReady, () => {
     console.log('Bot is online!');
@@ -69,7 +69,7 @@ const joinAndRecord = async (interaction) => {
     connection.on(VoiceConnectionStatus.Ready, () => {
         console.log('The bot has connected to the channel!');
         const receiver = connection.receiver;
-        currentReceivers[channel.id] = receiver;
+        currentReceiver = receiver;
 
         const voiceChannelDir = path.join(__dirname, 'channel_messages', channel.name);
         if (!fs.existsSync(voiceChannelDir)) {
@@ -80,7 +80,7 @@ const joinAndRecord = async (interaction) => {
             const user = client.users.cache.get(userId);
             console.log(`I'm listening to ${user.username}`);
 
-            if (!pcmStreams[userId]) {
+            if (!recordingStreams[userId]) {
                 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
                 const pcmPath = path.join(voiceChannelDir, `${user.username}-${timestamp}.pcm`);
                 const out = fs.createWriteStream(pcmPath);
@@ -91,7 +91,7 @@ const joinAndRecord = async (interaction) => {
                     rate: 48000,
                 });
 
-                pcmStreams[userId] = {
+                recordingStreams[userId] = {
                     stream: pcmStream,
                     path: pcmPath,
                     out: out,
@@ -104,7 +104,7 @@ const joinAndRecord = async (interaction) => {
                 out.on('finish', () => {
                     console.log(`Finished recording ${user.username}`);
 
-                    const { path: pcmPath, mp3Path } = pcmStreams[userId];
+                    const { path: pcmPath, mp3Path } = recordingStreams[userId];
                     console.log(`Starting conversion for ${user.username}`);
                     ffmpeg(pcmPath)
                         .inputFormat('s16le')  // Set the input format
@@ -121,7 +121,7 @@ const joinAndRecord = async (interaction) => {
                         .on('end', () => {
                             console.log(`Converted ${user.username}'s recording to MP3`);
                             fs.unlinkSync(pcmPath);
-                            delete pcmStreams[userId];
+                            delete recordingStreams[userId];
                         })
                         .on('error', (err) => {
                             console.error(`Error converting ${user.username}'s recording: ${err.message}`);
@@ -141,12 +141,6 @@ const joinAndRecord = async (interaction) => {
                 });
             }
         });
-
-        receiver.speaking.on('end', (userId) => {
-            if (pcmStreams[userId]) {
-                pcmStreams[userId].out.end();
-            }
-        });
     });
 
     await interaction.reply(`Started recording in the voice channel ${channel.name}!`);
@@ -163,9 +157,12 @@ const stopRecording = async (interaction) => {
     const connection = getVoiceConnection(channel.guild.id);
 
     if (connection) {
+        for (const userId in recordingStreams) {
+            recordingStreams[userId].out.end();
+        }
         connection.destroy();
-        delete currentReceivers[channel.id];
-        currentConnection = null;
+        currentReceiver = null;
+        recordingStreams = {};
         await interaction.reply(`Stopped recording and left the voice channel ${channel.name}.`);
     } else {
         await interaction.reply(`The bot is not in a voice channel.`);
