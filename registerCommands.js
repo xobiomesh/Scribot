@@ -9,7 +9,10 @@ const commands = [
         .setDescription('Displays this help message'),
     new SlashCommandBuilder()
         .setName('fetch')
-        .setDescription('Fetches all messages from the channel and saves them to a file')
+        .setDescription('Fetches all messages from the channel and saves them to a file'),
+    new SlashCommandBuilder()
+        .setName('fetchall')
+        .setDescription('Fetches all messages from all channels and saves them to their respective files')
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
