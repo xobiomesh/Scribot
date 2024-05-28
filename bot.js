@@ -5,12 +5,14 @@ const path = require('path');
 const { joinVoiceChannel, getVoiceConnection, VoiceReceiver, EndBehaviorType, VoiceConnectionStatus } = require('@discordjs/voice');
 const prism = require('prism-media');
 const ffmpeg = require('fluent-ffmpeg');
+const wav = require('wav');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates] });
 
 let currentConnection = null;
 let currentReceiver = null;
 let recordingStreams = {};
+let startTime = null;
 
 client.once(Events.ClientReady, () => {
     console.log('Bot is online!');
@@ -45,7 +47,7 @@ const fetchMessagesFromChannel = async (channel) => {
         }
     }
 
-    const content = messages.reverse().map(formatMessage).join('\n');
+    const content = messages.reverse().map(formatMessage).join('\n') + '\n';
     fs.writeFileSync(filePath, content);
 };
 
@@ -65,6 +67,7 @@ const joinAndRecord = async (interaction) => {
     });
 
     currentConnection = connection;
+    startTime = new Date().toISOString().replace(/[:.]/g, '-');
 
     connection.on(VoiceConnectionStatus.Ready, () => {
         console.log('The bot has connected to the channel!');
@@ -81,9 +84,8 @@ const joinAndRecord = async (interaction) => {
             console.log(`I'm listening to ${user.username}`);
 
             if (!recordingStreams[userId]) {
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-                const pcmPath = path.join(voiceChannelDir, `${user.username}-${timestamp}.pcm`);
-                const out = fs.createWriteStream(pcmPath);
+                const wavPath = path.join(voiceChannelDir, `${user.username}-${startTime}.wav`);
+                const out = fs.createWriteStream(wavPath);
 
                 const pcmStream = new prism.opus.Decoder({
                     frameSize: 960,
@@ -91,46 +93,20 @@ const joinAndRecord = async (interaction) => {
                     rate: 48000,
                 });
 
+                const wavWriter = new wav.FileWriter(wavPath, {
+                    sampleRate: 48000,
+                    channels: 2,
+                });
+
                 recordingStreams[userId] = {
                     stream: pcmStream,
-                    path: pcmPath,
+                    path: wavPath,
                     out: out,
-                    mp3Path: path.join(voiceChannelDir, `${user.username}-${timestamp}.mp3`)
+                    mp3Path: path.join(voiceChannelDir, `${user.username}-${startTime}.mp3`)
                 };
 
                 const opusStream = receiver.subscribe(userId);
-                opusStream.pipe(pcmStream).pipe(out);
-
-                out.on('finish', () => {
-                    console.log(`Finished recording ${user.username}`);
-
-                    const { path: pcmPath, mp3Path } = recordingStreams[userId];
-                    console.log(`Starting conversion for ${user.username}`);
-                    ffmpeg(pcmPath)
-                        .inputFormat('s16le')  // Set the input format
-                        .audioChannels(2)      // Set the number of audio channels
-                        .audioFrequency(48000) // Set the sample rate
-                        .audioBitrate(128)
-                        .save(mp3Path)
-                        .on('start', (commandLine) => {
-                            console.log(`Spawned ffmpeg with command: ${commandLine}`);
-                        })
-                        .on('progress', (progress) => {
-                            console.log(`Processing: ${progress.percent}% done`);
-                        })
-                        .on('end', () => {
-                            console.log(`Converted ${user.username}'s recording to MP3`);
-                            fs.unlinkSync(pcmPath);
-                            delete recordingStreams[userId];
-                        })
-                        .on('error', (err) => {
-                            console.error(`Error converting ${user.username}'s recording: ${err.message}`);
-                        });
-                });
-
-                out.on('error', (err) => {
-                    console.error(`Error writing PCM file for ${user.username}: ${err.message}`);
-                });
+                opusStream.pipe(pcmStream).pipe(wavWriter).pipe(out);
 
                 pcmStream.on('error', (err) => {
                     console.error(`Error decoding OPUS stream for ${user.username}: ${err.message}`);
@@ -138,6 +114,10 @@ const joinAndRecord = async (interaction) => {
 
                 opusStream.on('error', (err) => {
                     console.error(`Error with OPUS stream for ${user.username}: ${err.message}`);
+                });
+
+                out.on('error', (err) => {
+                    console.error(`Error writing WAV file for ${user.username}: ${err.message}`);
                 });
             }
         });
@@ -158,7 +138,30 @@ const stopRecording = async (interaction) => {
 
     if (connection) {
         for (const userId in recordingStreams) {
-            recordingStreams[userId].out.end();
+            const { path: wavPath, mp3Path, out } = recordingStreams[userId];
+            out.end(() => {
+                console.log(`Finished recording ${client.users.cache.get(userId).username}`);
+                // Convert WAV to MP3 using ffmpeg
+                console.log(`Starting conversion for ${client.users.cache.get(userId).username}`);
+                ffmpeg(wavPath)
+                    .audioChannels(2)      // Set the number of audio channels
+                    .audioFrequency(48000) // Set the sample rate
+                    .audioBitrate(128)
+                    .save(mp3Path)
+                    .on('start', (commandLine) => {
+                        console.log(`Spawned ffmpeg with command: ${commandLine}`);
+                    })
+                    .on('progress', (progress) => {
+                        console.log(`Processing: ${progress.percent}% done`);
+                    })
+                    .on('end', () => {
+                        console.log(`Converted ${client.users.cache.get(userId).username}'s recording to MP3`);
+                        fs.unlinkSync(wavPath);
+                    })
+                    .on('error', (err) => {
+                        console.error(`Error converting ${client.users.cache.get(userId).username}'s recording: ${err.message}`);
+                    });
+            });
         }
         connection.destroy();
         currentReceiver = null;
