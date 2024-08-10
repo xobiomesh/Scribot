@@ -18,6 +18,21 @@ client.once(Events.ClientReady, () => {
     console.log('Bot is online!');
 });
 
+//Download videos
+
+const ytdlpWrap = require('yt-dlp-wrap').default;
+const ytDlp = new ytdlpWrap();
+
+async function downloadYouTubeVideo(url, outputDir) {
+    try {
+        const result = await ytDlp.exec([url, '-o', `${outputDir}/%(title)s.%(ext)s`]);
+        console.log(`Downloaded video to ${outputDir}:`, result);
+    } catch (error) {
+        console.error('Failed to download video:', error);
+    }
+}
+
+
 // Function to format a message for logging
 const formatMessage = (msg) => {
     let formattedMessage = `${msg.createdAt.toISOString()} - ${msg.author.username}: ${msg.content}`;
@@ -217,6 +232,17 @@ client.on(Events.MessageCreate, message => {
         const logMessage = formatMessage(message) + '\n';
         fs.appendFileSync(filePath, logMessage);
     }
+    // Check for YouTube URLs and download
+    const youtubeUrlRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/g;
+    const urls = message.content.match(youtubeUrlRegex);
+    if (urls) {
+        const outputDir = path.join(__dirname, 'downloaded_videos');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+        urls.forEach(url => downloadYouTubeVideo(url, outputDir));
+    }
+
 });
 
 client.login(process.env.DISCORD_BOT_TOKEN);
